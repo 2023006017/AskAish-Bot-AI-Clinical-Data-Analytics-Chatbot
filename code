@@ -1,0 +1,244 @@
+############################################################
+# AskAish Bot - AI Clinical Analytics Dashboard
+############################################################
+
+library(shiny)
+library(dplyr)
+library(ggplot2)
+library(DT)
+library(randomForest)
+
+############################################################
+# 1 CREATE SYNTHETIC CLINICAL DATA
+############################################################
+
+set.seed(123)
+
+n <- 300
+
+data <- data.frame(
+  SUBJID = 1:n,
+  AGE = round(rnorm(n,55,10)),
+  SEX = sample(c("Male","Female"),n,replace=TRUE),
+  TRT = sample(c("Placebo","DrugA","DrugB"),n,replace=TRUE),
+  ALT = round(rnorm(n,40,10)),
+  AST = round(rnorm(n,35,8)),
+  WEIGHT = round(rnorm(n,70,12))
+)
+
+data$RISK <- ifelse(data$ALT>50 | data$AST>45,"High","Low")
+data$RISK <- as.factor(data$RISK)
+
+############################################################
+# 2 MACHINE LEARNING MODEL
+############################################################
+
+model <- randomForest(
+  RISK ~ AGE + ALT + AST + WEIGHT,
+  data=data
+)
+
+############################################################
+# 3 TFL TABLES
+############################################################
+
+data %>%
+  group_by(TRT, SEX) %>%
+  summarise(
+    Subjects = n(),
+    Mean_Age = mean(AGE),
+    Mean_Weight = mean(WEIGHT)
+  )
+lab <- data %>%
+  group_by(TRT,SEX) %>%
+  summarise(
+    ALT_Mean=mean(ALT),
+    AST_Mean=mean(AST)
+  )
+
+############################################################
+# 4 AI INSIGHTS
+############################################################
+
+sex_counts <- table(data$SEX)
+trt_counts <- table(data$TRT)
+
+insights <- paste(
+  if(mean(data$AGE)>50) "Population appears older.",
+  paste("Most subjects:",names(which.max(sex_counts))),
+  paste("Largest treatment group:",names(which.max(trt_counts)))
+)
+
+############################################################
+# UI
+############################################################
+
+ui <- fluidPage(
+  
+  titlePanel("🤖 AskAish Bot - Clinical AI Dashboard"),
+  
+  sidebarLayout(
+    
+    sidebarPanel(
+      
+      textInput("question","Ask AskAish Bot:"),
+      
+      actionButton("ask","Ask"),
+      
+      hr(),
+      
+      downloadButton("report","Download Report")
+    ),
+    
+    mainPanel(
+      
+      tabsetPanel(
+        
+        tabPanel("Dashboard",
+                 
+                 plotOutput("ageplot"),
+                 plotOutput("altplot"),
+                 plotOutput("sexplot")
+        ),
+        
+        tabPanel("TFL Tables",
+                 
+                 h3("Demographics"),
+                 DTOutput("demogtable"),
+                 
+                 h3("Lab Summary"),
+                 DTOutput("labtable")
+        ),
+        
+        tabPanel("Machine Learning",
+                 
+                 verbatimTextOutput("modelsummary")
+                 
+        ),
+        
+        tabPanel("AI Insights",
+                 
+                 verbatimTextOutput("insighttext")
+        ),
+        
+        tabPanel("AskAish Bot",
+                 
+                 verbatimTextOutput("botresponse")
+        )
+      )
+    )
+  )
+)
+
+############################################################
+# SERVER
+############################################################
+
+server <- function(input, output) {
+  
+  output$ageplot <- renderPlot({
+    
+    ggplot(data,aes(x=AGE))+
+      geom_histogram(fill="skyblue",color="black",binwidth=5)+
+      ggtitle("Age Distribution")
+    
+  })
+  
+  output$altplot <- renderPlot({
+    
+    ggplot(data,aes(x=TRT,y=ALT,fill=TRT))+
+      geom_boxplot()+
+      ggtitle("ALT by Treatment")
+    
+  })
+  
+  output$sexplot <- renderPlot({
+    
+    ggplot(data,aes(x=SEX,fill=SEX))+
+      geom_bar()+
+      ggtitle("Sex Distribution")
+    
+  })
+  
+  output$demogtable <- renderDT({
+    demog
+  })
+  
+  output$labtable <- renderDT({
+    lab
+  })
+  
+  output$modelsummary <- renderPrint({
+    model
+  })
+  
+  output$insighttext <- renderPrint({
+    insights
+  })
+  
+  observeEvent(input$ask,{
+    
+    question <- tolower(input$question)
+    
+    response <- ""
+    
+    if(grepl("summary",question)){
+      response <- capture.output(summary(data))
+    }
+    
+    else if(grepl("risk",question)){
+      response <- capture.output(table(data$RISK))
+    }
+    
+    else if(grepl("treatment",question)){
+      response <- capture.output(trt_counts)
+    }
+    
+    else{
+      response <- "Ask about summary, risk, or treatment."
+    }
+    
+    output$botresponse <- renderPrint({
+      response
+    })
+    
+  })
+  
+  ############################################################
+  # REPORT DOWNLOAD
+  ############################################################
+  
+  output$report <- downloadHandler(
+    
+    filename=function(){
+      paste("AskAish_Report",".txt",sep="")
+    },
+    
+    content=function(file){
+      
+      writeLines(c(
+        "ASKAISH BOT REPORT",
+        "",
+        "DATA SUMMARY",
+        capture.output(summary(data)),
+        "",
+        "DEMOGRAPHICS",
+        capture.output(demog),
+        "",
+        "LAB SUMMARY",
+        capture.output(lab),
+        "",
+        "AI INSIGHTS",
+        insights
+      ),file)
+      
+    }
+  )
+  
+}
+
+############################################################
+
+shinyApp(ui,server)
+
+############################################################
